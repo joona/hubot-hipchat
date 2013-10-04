@@ -12,6 +12,9 @@ class HipChat extends Adapter
     super robot
     @logger = robot.logger
 
+    @robot.Response.prototype.html = (strings...) ->
+      @robot.adapter.html @envelope, strings...
+
   topic: (envelope, strings...) ->
     params =
       room_id: @roomIdFromJid(envelope.room)
