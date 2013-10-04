@@ -3,6 +3,8 @@ HTTPS = require "https"
 {inspect} = require "util"
 Connector = require "./connector"
 promise = require "./promises"
+querystring = require "querystring"
+_  = require("underscore")
 
 class HipChat extends Adapter
 
@@ -10,29 +12,35 @@ class HipChat extends Adapter
     super robot
     @logger = robot.logger
 
+  topic: (envelope, strings...) ->
+    params =
+      room_id: @roomIdFromJid(envelope.room)
+      topic: strings.join(" / ")
+      from: @robot.brain.userForId(@options.jid).name
+
+    @post "rooms/topic", params, (err, data) ->
+
+  html: (envelope, strings...) ->
+    params =
+      room_id: @roomIdFromJid(envelope.room)
+      message: strings.join("")
+      from: @robot.brain.userForId(@options.jid).name
+      message_format: "html"
+      color: "green"
+
+    @post "rooms/message", params, (err, data) ->
+
   send: (envelope, strings...) ->
     {user, room} = envelope
-    user = envelope if not user # pre-2.4.2 style
-
-    target_jid =
-      # most common case - we're replying to a user in a room or 1-1
-      user?.reply_to or
-      # allows user objects to be passed in
-      user?.jid or
-      if user?.search?(/@/) >= 0
-        user # allows user to be a jid string
-      else
-        room # this will happen if someone uses robot.messageRoom(jid, ...)
-
-    if not target_jid
-      return @logger.error "ERROR: Not sure who to send to: envelope=#{inspect envelope}"
+    reply_to = room or user.jid
 
     for str in strings
-      @connector.message target_jid, str
+      @connector.message reply_to, str
 
   reply: (envelope, strings...) ->
-    user = if envelope.user then envelope.user else envelope
-    @send envelope, "@#{user.mention_name} #{str}" for str in strings
+    mention = ""
+    mention = "@#{envelope.user.mention_name} " if envelope.user
+    @send envelope, "#{mention}#{str}" for str in strings
 
   run: ->
     @options =
@@ -71,13 +79,21 @@ class HipChat extends Adapter
 
       init
         .done (users) =>
+          @users = users
+
           # Save users to brain
           for user in users
-            user.id = @userIdFromJid user.jid
-            @robot.brain.userForId user.id, user
+            user.id = user.jid
+
+          @robot.brain.on "loaded", =>
+            for user in @users
+              @robot.brain.data.users[user.id] = user
+            @robot.brain.save
+
           # Join requested rooms
           if @options.rooms is "All" or @options.rooms is "@All"
             connector.getRooms (err, rooms, stanza) =>
+              @rooms = rooms
               if rooms
                 for room in rooms
                   @logger.info "Joining #{room.jid}"
@@ -92,44 +108,35 @@ class HipChat extends Adapter
         .fail (err) =>
           @logger.error "Can't list users: #{errmsg err}" if err
 
-      handleMessage = (opts) =>
-        # buffer message events until the roster fetch completes
-        # to ensure user data is properly loaded
-        init.done =>
-          {getAuthor, message, reply_to, room} = opts
-          author = getAuthor() or {}
-          author.reply_to = reply_to
-          author.room = room
-          @receive new TextMessage(author, message)
-
-      connector.onMessage (channel, from, message) =>
+      connector.onMessage (room, from_user_name, message) =>
         # reformat leading @mention name to be like "name: message" which is
         # what hubot expects
         mention_name = connector.mention_name
         regex = new RegExp "^@#{mention_name}\\b", "i"
         message = message.replace regex, "#{mention_name}: "
-        handleMessage
-          getAuthor: => @robot.brain.userForName(from) or new User(from)
-          message: message
-          reply_to: channel
-          room: @roomNameFromJid(channel)
 
-      connector.onPrivateMessage (from, message) =>
+        textMessage = new TextMessage @robot.brain.userForName(from_user_name), message
+        textMessage.room = room;
+
+        @receive textMessage
+
+      connector.onPrivateMessage (from_user_jid, message) =>
         # remove leading @mention name if present and format the message like
         # "name: message" which is what hubot expects
         mention_name = connector.mention_name
         regex = new RegExp "^@#{mention_name}\\b", "i"
         message = "#{mention_name}: #{message.replace regex, ""}"
-        handleMessage
-          getAuthor: => @robot.brain.userForId(@userIdFromJid from)
-          message: message
-          reply_to: from
+
+        textMessage = new TextMessage @robot.brain.userForId(from_user_jid), message
+        textMessage.room = null
+
+        @receive textMessage
 
       changePresence = (PresenceMessage, user_jid, room_jid) =>
         # buffer presence events until the roster fetch completes
         # to ensure user data is properly loaded
         init.done =>
-          user = @robot.brain.userForId(@userIdFromJid(user_jid)) or {}
+          user = @robot.brain.userForId(user_jid)
           if user
             user.room = room_jid
             @receive new PresenceMessage(user)
@@ -155,17 +162,10 @@ class HipChat extends Adapter
 
     @connector = connector
 
-  userIdFromJid: (jid) ->
-    try
-      jid.match(/^\d+_(\d+)@chat\./)[1]
-    catch e
-      @logger.error "Bad user JID: #{jid}"
-
-  roomNameFromJid: (jid) ->
-    try
-      jid.match(/^\d+_(.+)@conf\./)[1]
-    catch e
-      @logger.error "Bad room JID: #{jid}"
+  roomIdFromJid: (jid) ->
+    room = _.find @rooms, (room) ->
+      room.jid == jid
+    room?.id
 
   # Convenience HTTP Methods for posting on behalf of the token'd user
   get: (path, callback) ->
@@ -175,24 +175,31 @@ class HipChat extends Adapter
     @request "POST", path, body, callback
 
   request: (method, path, body, callback) ->
-    @logger.debug "Request:", method, path, body
     host = @options.host or "api.hipchat.com"
     headers = "Host": host
 
     unless @options.token
       return callback "No API token provided to Hubot", null
 
+    path = "/v1/" + path + "?auth_token=#{@options.token}"
+
     options =
       agent  : false
       host   : host
       port   : 443
-      path   : path += "?auth_token=#{@options.token}"
+      path   : path
       method : method
       headers: headers
+
+    body = querystring.stringify body if !_.isString(body)
+
+
 
     if method is "POST"
       headers["Content-Type"] = "application/x-www-form-urlencoded"
       options.headers["Content-Length"] = body.length
+
+    @logger.debug "Request:", options, body
 
     request = HTTPS.request options, (response) =>
       data = ""
