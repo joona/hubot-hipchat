@@ -118,7 +118,9 @@ class HipChat extends Adapter
         regex = new RegExp "^@#{mention_name}\\b", "i"
         message = message.replace regex, "#{mention_name}: "
 
-        textMessage = new TextMessage @robot.brain.userForName(from_user_name), message
+        user = @robot.brain.userForName(from_user_name) or new User(from_user_name)
+
+        textMessage = new TextMessage user, message
         textMessage.room = room;
 
         @receive textMessage
@@ -130,7 +132,9 @@ class HipChat extends Adapter
         regex = new RegExp "^@#{mention_name}\\b", "i"
         message = "#{mention_name}: #{message.replace regex, ""}"
 
-        textMessage = new TextMessage @robot.brain.userForId(from_user_jid), message
+        user = @robot.brain.userForId(from_user_jid) or new User(from_user_jid)
+
+        textMessage = new TextMessage user, message
         textMessage.room = null
 
         @receive textMessage
@@ -139,7 +143,7 @@ class HipChat extends Adapter
         # buffer presence events until the roster fetch completes
         # to ensure user data is properly loaded
         init.done =>
-          user = @robot.brain.userForId(user_jid)
+          user = @robot.brain.userForId(user_jid) or new User(user_jid)
           if user
             user.room = room_jid
             @receive new PresenceMessage(user)
