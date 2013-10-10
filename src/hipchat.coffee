@@ -29,7 +29,7 @@ class HipChat extends Adapter
       message: strings.join("")
       from: @robot.brain.userForId(@options.jid).name
       message_format: "html"
-      color: "green"
+      color: (envelope.color || "yellow")
 
     @post "rooms/message", params, (err, data) ->
 
