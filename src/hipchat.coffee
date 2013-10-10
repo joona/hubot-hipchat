@@ -105,9 +105,19 @@ class HipChat extends Adapter
                 @logger.error "Can't list rooms: #{errmsg err}"
           # Join all rooms
           else
-            for room_jid in @options.rooms.split ","
-              @logger.info "Joining #{room_jid}"
-              connector.join room_jid
+            selected = @options.rooms.split ","
+            @rooms = []
+
+            connector.getRooms (err, rooms, stanza) =>
+              if rooms
+                for room in rooms
+                  if room.jid in selected
+                    @logger.info "Joining #{room.jid}"
+                    @rooms.push room
+                    connector.join room.jid
+              else
+                @logger.error "Can't list rooms: #{errmsg err}"
+
         .fail (err) =>
           @logger.error "Can't list users: #{errmsg err}" if err
 
