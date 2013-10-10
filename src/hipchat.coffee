@@ -25,7 +25,7 @@ class HipChat extends Adapter
 
   html: (envelope, strings...) ->
     params =
-      room_id: @roomIdFromJid(envelope.room)
+      room_id: (envelope.room_name || @roomIdFromJid(envelope.room))
       message: strings.join("")
       from: (envelope.name || @robot.brain.userForId(@options.jid).name)
       message_format: "html"
