@@ -190,6 +190,8 @@ class HipChat extends Adapter
 
     path = "/v1/" + path + "?auth_token=#{@options.token}"
 
+    @logger.info "Request path is " + path
+
     options =
       agent  : false
       host   : host
